@@ -27,6 +27,18 @@ def get_md5(file_path):
     except Exception:
         return None
 
+# Google Docs extensions to skip (since they are metadata/shortcut files and MD5 comparisons don't apply)
+GOOGLE_DOC_EXTENSIONS = {
+    ".gdoc",
+    ".gsheet",
+    ".gslides",
+    ".gform",
+    ".gdraw",
+    ".gtable",
+    ".glink",
+    ".gmap",
+}
+
 def clean_duplicate_files(root_dir=".", dry_run=True):
     """
     Search for files with '(1)' in their name and delete them 
@@ -37,6 +49,10 @@ def clean_duplicate_files(root_dir=".", dry_run=True):
     # Recursively find all files containing ' (1)'
     for path in root.rglob("* (1).*"):
         if not path.is_file():
+            continue
+            
+        # Skip Google Docs files
+        if path.suffix.lower() in GOOGLE_DOC_EXTENSIONS:
             continue
             
         # Construct the potential original filename
