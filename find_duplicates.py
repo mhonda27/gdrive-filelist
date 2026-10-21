@@ -49,7 +49,7 @@ EXCLUDED_DIRS = {".Spotlight-V100"}
 
 
 def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> None:
-    # Dictionary mapping size => list of {"md5": str, "filePath": str, "source_idx": int}
+    # Dictionary mapping (size, ext) => list of {"md5": str, "filePath": str, "source_idx": int}
     files_by_size = defaultdict(list)
 
     # Step 1: Read the input TSV file
@@ -76,10 +76,12 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
                 continue
 
             file_path = row.get("filePath") or row.get("fileName") or ""
-            if any(part in EXCLUDED_DIRS for part in Path(file_path).parts):
+            path_obj = Path(file_path)
+            if any(part in EXCLUDED_DIRS for part in path_obj.parts):
                 continue
 
-            files_by_size[size].append(
+            ext = path_obj.suffix.lower()
+            files_by_size[(size, ext)].append(
                 {
                     "md5": row.get("MD5", ""),
                     "filePath": file_path,
@@ -143,7 +145,8 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
         if unit.is_file():
             try:
                 size = unit.stat().st_size
-                files_by_size[size].append(
+                ext = unit.suffix.lower()
+                files_by_size[(size, ext)].append(
                     {
                         "md5": "",
                         "filePath": str(unit),
@@ -160,7 +163,8 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
                     p = Path(root) / file_name
                     try:
                         size = p.stat().st_size
-                        files_by_size[size].append(
+                        ext = p.suffix.lower()
+                        files_by_size[(size, ext)].append(
                             {
                                 "md5": "",
                                 "filePath": str(p),
@@ -196,22 +200,22 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
     # Step 3: Remove entries where the file list size is 1
     total_sizes = len(files_by_size)
     sizes_to_delete = []
-    for idx, (size, files) in enumerate(files_by_size.items(), start=1):
+    for idx, (key, files) in enumerate(files_by_size.items(), start=1):
         if len(files) < 2:
-            sizes_to_delete.append(size)
+            sizes_to_delete.append(key)
         if idx % 1000 == 0 or idx == total_sizes:
             pct = (idx / total_sizes) * 100 if total_sizes else 100.0
             print(
-                f"\r[Step 3/4] Filtering unique sizes: {pct:.1f}% ({idx:,}/{total_sizes:,})\033[K",
+                f"\r[Step 3/4] Filtering unique size+ext: {pct:.1f}% ({idx:,}/{total_sizes:,})\033[K",
                 end="",
                 flush=True,
             )
 
-    for size in sizes_to_delete:
-        del files_by_size[size]
+    for key in sizes_to_delete:
+        del files_by_size[key]
 
     print(
-        f"\r[Step 3/4] Filtering unique sizes: 100.0% ({total_sizes:,}/{total_sizes:,}) - Done ({len(files_by_size):,} candidate size groups)\033[K"
+        f"\r[Step 3/4] Filtering unique size+ext: 100.0% ({total_sizes:,}/{total_sizes:,}) - Done ({len(files_by_size):,} candidate groups)\033[K"
     )
 
     # Step 4: Calculate MD5s, group duplicates, and write results to file
@@ -220,7 +224,7 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
     duplicate_groups_count = 0
 
     with open(output_file, "w", encoding="utf-8") as out:
-        for size, files in files_by_size.items():
+        for (size, ext), files in files_by_size.items():
             # 4.1 Compute MD5 for files missing an MD5 hash
             for item in files:
                 if not item["md5"]:
