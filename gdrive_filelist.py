@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# This script retrieves the names and MD5 checksums of all files in a Google
+# This script retrieves the names, MD5 checksums, and sizes of all files in a Google
 # Drive account using the Google Drive API and saves them to a TSV file.
 # Please install the required libraries before running the script:
 #   python3 -m pip install google-api-python-client
@@ -11,7 +11,7 @@ from google.oauth2 import service_account
 import argparse
 
 parser = argparse.ArgumentParser(
-    description="Retrieve names and MD5 checksums of all files in a Google Drive account and save them to a TSV file."
+    description="Retrieve names, MD5 checksums, and sizes of all files in a Google Drive account and save them to a TSV file."
 )
 parser.add_argument(
     "--test",
@@ -78,7 +78,7 @@ while True:
         .list(
             pageSize=100 if args.test else 1000,
             q="mimeType != 'application/vnd.google-apps.folder' and trashed = false",
-            fields="nextPageToken, files(name, md5Checksum, parents)",
+            fields="nextPageToken, files(name, md5Checksum, parents, size)",
             pageToken=page_token,
         )
         .execute()
@@ -99,7 +99,7 @@ print(f"Got {len(all_files)} files.")
 
 with open("all_files.tsv", "w", encoding="utf-8-sig", newline="") as f:
     writer = csv.writer(f, delimiter="\t")
-    writer.writerow(["fileName", "MD5"])
+    writer.writerow(["size", "MD5", "fileName"])
     for file in all_files:
         checksum = file.get("md5Checksum", "")
         if not checksum:
@@ -111,4 +111,5 @@ with open("all_files.tsv", "w", encoding="utf-8-sig", newline="") as f:
             full_file_name = f"{folder_path}/{file.get('name')}"
         else:
             full_file_name = file.get("name")
-        writer.writerow([full_file_name, checksum])
+        size = file.get("size", "")
+        writer.writerow([size, checksum, full_file_name])
