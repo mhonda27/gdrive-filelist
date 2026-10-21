@@ -54,8 +54,20 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
 
     # Step 1: Read the input TSV file
     with open(tsv_file, "r", encoding="utf-8-sig") as f:
+        total_rows = sum(1 for _ in f) - 1
+    total_rows = max(total_rows, 0)
+
+    with open(tsv_file, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
+        for idx, row in enumerate(reader, start=1):
+            if idx % 500 == 0 or idx == total_rows:
+                pct = (idx / total_rows) * 100 if total_rows else 100.0
+                print(
+                    f"\r[Step 1/4] Reading TSV: {pct:.1f}% ({idx:,}/{total_rows:,})\033[K",
+                    end="",
+                    flush=True,
+                )
+
             if not row.get("size"):
                 continue
             try:
@@ -74,50 +86,157 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
                     "source_idx": 0,
                 }
             )
+    print(
+        f"\r[Step 1/4] Reading TSV: 100.0% ({total_rows:,}/{total_rows:,}) - Done\033[K"
+    )
 
     # Step 2: Recursively scan specified directories and append files
-    for idx, dir_path in enumerate(input_dirs, start=1):
+    scan_tasks = []
+    for src_idx, dir_path in enumerate(input_dirs, start=1):
         target_dir = Path(dir_path)
         if not target_dir.is_dir():
             print(
-                f"Warning: Directory '{dir_path}' not found or is not a directory.",
+                f"\nWarning: Directory '{dir_path}' not found or is not a directory.",
+                file=sys.stderr,
+            )
+            continue
+        if target_dir.name in EXCLUDED_DIRS:
+            continue
+
+        try:
+            top_entries = [
+                p for p in target_dir.iterdir() if p.name not in EXCLUDED_DIRS
+            ]
+        except (PermissionError, OSError) as e:
+            print(
+                f"\nWarning: Failed to access '{target_dir}': {e}",
                 file=sys.stderr,
             )
             continue
 
-        if target_dir.name in EXCLUDED_DIRS:
-            continue
-
-        for root, dirs, files in os.walk(target_dir):
-            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
-            for file_name in files:
-                p = Path(root) / file_name
+        units = []
+        for entry in top_entries:
+            if entry.is_dir() and len(top_entries) < 10:
                 try:
-                    size = p.stat().st_size
-                    files_by_size[size].append(
-                        {
-                            "md5": "",
-                            "filePath": str(p),
-                            "source_idx": idx,
-                        }
-                    )
+                    sub_entries = [
+                        p for p in entry.iterdir() if p.name not in EXCLUDED_DIRS
+                    ]
+                    if sub_entries:
+                        units.extend(sub_entries)
+                    else:
+                        units.append(entry)
                 except (PermissionError, OSError):
-                    continue
+                    units.append(entry)
+            else:
+                units.append(entry)
+
+        if not units:
+            units = [target_dir]
+
+        for u in units:
+            scan_tasks.append((u, src_idx))
+
+    total_tasks = len(scan_tasks)
+    total_scanned_files = 0
+
+    for task_idx, (unit, src_idx) in enumerate(scan_tasks, start=1):
+        if unit.is_file():
+            try:
+                size = unit.stat().st_size
+                files_by_size[size].append(
+                    {
+                        "md5": "",
+                        "filePath": str(unit),
+                        "source_idx": src_idx,
+                    }
+                )
+                total_scanned_files += 1
+            except (PermissionError, OSError):
+                pass
+        elif unit.is_dir():
+            for root, dirs, files in os.walk(unit):
+                dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+                for file_name in files:
+                    p = Path(root) / file_name
+                    try:
+                        size = p.stat().st_size
+                        files_by_size[size].append(
+                            {
+                                "md5": "",
+                                "filePath": str(p),
+                                "source_idx": src_idx,
+                            }
+                        )
+                        total_scanned_files += 1
+                        if total_scanned_files % 200 == 0:
+                            pct = (
+                                ((task_idx - 1) / total_tasks) * 100
+                                if total_tasks
+                                else 0.0
+                            )
+                            print(
+                                f"\r[Step 2/4] Scanning directories: {pct:.1f}% ({task_idx - 1}/{total_tasks} units, {total_scanned_files:,} files)\033[K",
+                                end="",
+                                flush=True,
+                            )
+                    except (PermissionError, OSError):
+                        continue
+
+        pct = (task_idx / total_tasks) * 100 if total_tasks else 100.0
+        print(
+            f"\r[Step 2/4] Scanning directories: {pct:.1f}% ({task_idx}/{total_tasks} units, {total_scanned_files:,} files)\033[K",
+            end="",
+            flush=True,
+        )
+
+    print(
+        f"\r[Step 2/4] Scanning directories: 100.0% ({total_tasks}/{total_tasks} units, {total_scanned_files:,} files) - Done\033[K"
+    )
 
     # Step 3: Remove entries where the file list size is 1
-    sizes_to_delete = [
-        size for size, files in files_by_size.items() if len(files) < 2
-    ]
+    total_sizes = len(files_by_size)
+    sizes_to_delete = []
+    for idx, (size, files) in enumerate(files_by_size.items(), start=1):
+        if len(files) < 2:
+            sizes_to_delete.append(size)
+        if idx % 1000 == 0 or idx == total_sizes:
+            pct = (idx / total_sizes) * 100 if total_sizes else 100.0
+            print(
+                f"\r[Step 3/4] Filtering unique sizes: {pct:.1f}% ({idx:,}/{total_sizes:,})\033[K",
+                end="",
+                flush=True,
+            )
+
     for size in sizes_to_delete:
         del files_by_size[size]
 
+    print(
+        f"\r[Step 3/4] Filtering unique sizes: 100.0% ({total_sizes:,}/{total_sizes:,}) - Done ({len(files_by_size):,} candidate size groups)\033[K"
+    )
+
     # Step 4: Calculate MD5s, group duplicates, and write results to file
+    total_step4_files = sum(len(files) for files in files_by_size.values())
+    processed_files = 0
+    duplicate_groups_count = 0
+
     with open(output_file, "w", encoding="utf-8") as out:
         for size, files in files_by_size.items():
             # 4.1 Compute MD5 for files missing an MD5 hash
             for item in files:
                 if not item["md5"]:
                     item["md5"] = calculate_md5(Path(item["filePath"]))
+                processed_files += 1
+                if processed_files % 5 == 0 or processed_files == total_step4_files:
+                    pct = (
+                        (processed_files / total_step4_files) * 100
+                        if total_step4_files
+                        else 100.0
+                    )
+                    print(
+                        f"\r[Step 4/4] Computing MD5 & finding duplicates: {pct:.1f}% ({processed_files:,}/{total_step4_files:,})\033[K",
+                        end="",
+                        flush=True,
+                    )
 
             # Group files by MD5 hash within the same size group
             md5_groups = defaultdict(list)
@@ -130,6 +249,7 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
                 if len(dup_files) < 2:
                     continue
 
+                duplicate_groups_count += 1
                 # Output header line: filesize: {size}, md5: {md5}
                 out.write(f"filesize: {size}, md5: {md5}\n")
 
@@ -162,6 +282,10 @@ def process_files(tsv_file: str, input_dirs: list[str], output_file: str) -> Non
                     out.write(
                         f"duplicate,{dup['filePath']},{category},{similarity}\n"
                     )
+
+    print(
+        f"\r[Step 4/4] Computing MD5 & finding duplicates: 100.0% ({total_step4_files:,}/{total_step4_files:,}) - Done ({duplicate_groups_count:,} duplicate groups found)\033[K"
+    )
 
 
 if __name__ == "__main__":
