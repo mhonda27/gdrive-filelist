@@ -47,7 +47,7 @@ def clean_duplicate_files(root_dir=".", dry_run=True):
     root = Path(root_dir)
     
     # Recursively find all files containing ' (1)'
-    for path in root.rglob("* (1).*"):
+    for path in root.rglob("* (2).*"):
         if not path.is_file():
             continue
             
@@ -61,7 +61,7 @@ def clean_duplicate_files(root_dir=".", dry_run=True):
         parent = path.parent
         suffix = path.suffix
         
-        clean_name = name.replace(" (1)", "")
+        clean_name = name.replace(" (2)", "")
         original_path = parent / f"{clean_name}{suffix}"
         
         if original_path.exists():
